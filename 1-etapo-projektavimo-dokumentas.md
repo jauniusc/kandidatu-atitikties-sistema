@@ -55,7 +55,7 @@ Pavyzdys:
 - **paaiškinimas** – kiekvieno kriterijaus (įgūdžių, patirties, atlyginimo) atskiras procentinis balas, kad HR matytų, *kodėl* gautas būtent toks bendras rezultatas, o ne tik galutinį skaičių.
 
 Pavyzdys: `{balas: 90, rekomendacija: "TINKAMAS", paaiskinimas: {SQL: 67, Docker: 100, patirtis: 100, atlyginimas: 100}}`
-Paaiškinimas: SQL kriterijus pasiekė tik 67 % savo galimo indėlio (kandidato lygis 2 žemesnis už reikalaujamą 3), o visi kiti kriterijai – 100 %. Bendras svorinis balas (67%×0,3 + 100%×0,2 + 100%×0,3 + 100%×0,2 ≈ 90) viršija ribinę 55–65 zoną ir visi privalomi reikalavimai tenkinti, todėl galutinė rekomendacija – TINKAMAS.
+Paaiškinimas: SQL kriterijus pasiekė tik 67 % savo galimo indėlio (kandidato lygis 2 žemesnis už reikalaujamą 3), o visi kiti kriterijai – 100 %. Bendras svorinis balas (67%×0,3 + 100%×0,2 + 100%×0,3 + 100%×0,2 ≈ 90) viršija ribinę 50–65 zoną ir visi privalomi reikalavimai tenkinti, todėl galutinė rekomendacija – TINKAMAS.
 
 **Veikimo eiga:**
 1. Validuoti, kad pozicijos kriterijų svoriai sumuojasi į 1,0.
@@ -70,16 +70,21 @@ Paaiškinimas: SQL kriterijus pasiekė tik 67 % savo galimo indėlio (kandidato 
 1. Jei kandidatas neatitinka bent vieno privalomo reikalavimo, galutinis rezultatas yra NETINKAMAS, nepriklausomai nuo kitų kriterijų balų.
 2. Įgūdžio kriterijaus balas = min(kandidato_lygis / reikalaujamas_lygis, 1,0) × 100 %. Pvz. kandidato SQL lygis 2 prie reikalaujamo 3 duoda 67 % atitiktį, o ne 0 % ar 100 %.
 3. Patirties kriterijaus balas = min(kandidato_patirtis / min_patirtis, 1,0) × 100 %.
-4. Atlyginimo kriterijaus balas skaičiuojamas pagal persidengimą su pozicijos intervalu: jei lūkestis patenka į intervalą – 100 %; jei viršija iki 10 % – balas mažėja proporcingai; jei viršija daugiau nei 10 % – 0 %.
+4. Atlyginimo kriterijaus balas lyginant kandidato lūkestį `L` su pozicijos intervalu `[min; max]`:
+   - `L < min` (lūkestis žemiau intervalo) – 100 %, nes pigesnis kandidatas darbdavio biudžeto neviršija; kandidatas dėl to nenubaudžiamas;
+   - `min ≤ L ≤ max` – 100 %;
+   - `max < L ≤ 1,1 × max` – balas = `(1 − (L − max) / (0,1 × max)) × 100 %`, t. y. mažėja tiesiškai nuo 100 % (ties `max`) iki 0 % (ties `1,1 × max`). Pvz. intervalas 2000–2800, `L` = 2940 → (1 − 140/280) × 100 = 50 %;
+   - `L > 1,1 × max` – 0 %.
 5. Bendras balas = Σ (kriterijaus balas × jo svoris). Visų kriterijų (įgūdžių, patirties, atlyginimo) svoriai turi sumuotis iki 1,0; jei nesusumuoja, sistema prieš skaičiavimą grąžina klaidą, o ne klaidingą balą.
-6. Jei bendras balas patenka tarp 50 ir 65 (imtinai), arba trūksta duomenų bent vienam kriterijui, rezultatas žymimas PERŽIŪRĖTI RANKINIU BŪDU, o ne automatiškai TINKAMAS/NETINKAMAS.
+6. Trūkstami duomenys. Kriterijaus duomuo laikomas **nežinomu**, jei jis nenurodytas (įgūdis nepateiktas kandidato sąraše, nėra patirties ar atlyginimo lūkesčio). Nežinomas kriterijus **neturi procentinio balo**, bet į bendrą sumą įneša 0 taškų (konservatyvus sprendimas: nežinomas duomuo nepakelia balo). Paaiškinime jis rodomas kaip „nežinoma“, o ne kaip 0 %. Tai skiriasi nuo žinomo, bet žemo rezultato: pvz. kandidato lūkestis, viršijantis `1,1 × max`, yra **0 %** (žinomas blogas atitikimas). Be to, nežinomas kriterijus visada įjungia rankinės peržiūros požymį (7 taisyklė). Privalomo reikalavimo nežinomumas (įgūdis nenurodytas) laikomas netenkintu → NETINKAMAS (1 taisyklė).
+7. Sprendimo tvarka: (a) netenkintas privalomas reikalavimas → NETINKAMAS; (b) kitu atveju, jei bent vienas svorinis kriterijus nežinomas **arba** bendras balas yra intervale **50 ≤ balas ≤ 65** (imtinai abi ribos) → PERŽIŪRĖTI RANKINIU BŪDU; (c) kitu atveju balas > 65 → TINKAMAS, balas < 50 → NETINKAMAS. Nežinomi duomenys todėl nuleidžia net aukštą balą į rankinę peržiūrą.
 
 ### Scenarijai būsimiems testams
 
 | Scenarijus | Pradinės sąlygos ir konkreti įvestis | Veiksmas | Tikslus laukiamas rezultatas |
 |---|---|---|---|
 | Įprastas atvejis | Pozicija: privalomas Python; kriterijai – SQL (reikalaujamas lygis 3, svoris 0,3), Docker (reikalaujamas lygis 2, svoris 0,2), patirtis (min 3 m., svoris 0,3), atlyginimas (2000–2800, svoris 0,2) | Kandidatas: Python 3, SQL 2, Docker 2, patirtis 4 m., lūkestis 2500 | TINKAMAS, balas ≈90 (SQL atitiktis tik 67 %, nes kandidato lygis žemesnis už reikalaujamą, bet kiti kriterijai kompensuoja) |
-| Ribinis atvejis arba konfliktas | Ta pati pozicija | Kandidatas atitinka privalomus reikalavimus, bet SQL lygis 1 ir Docker nenurodytas – bendras svorinis balas = 60 | PERŽIŪRĖTI RANKINIU BŪDU, paaiškinime nurodomi silpniausi kriterijai (SQL, Docker) |
+| Ribinis atvejis arba konfliktas | Ta pati pozicija (privalomas Python; SQL – lygis 3, svoris 0,3; Docker – lygis 2, svoris 0,2; patirtis – min 3 m., svoris 0,3; atlyginimas 2000–2800, svoris 0,2) | Kandidatas: Python 3, SQL 1, **Docker nenurodytas (nežinomas)**, patirtis 4 m., lūkestis 2500 | Kriterijų balai: SQL = min(1/3; 1) × 100 = 33,3 % → 33,3 % × 0,3 = **10**; Docker = **nežinoma** (ne 0 %) → įneša **0** taškų; patirtis = 100 % × 0,3 = **30**; atlyginimas = 100 % (2500 patenka į 2000–2800) × 0,2 = **20**. Bendras balas = 10 + 0 + 30 + 20 = **60**. 60 patenka į 50–65 zoną ir Docker nežinomas → PERŽIŪRĖTI RANKINIU BŪDU; paaiškinime: `{SQL: 33, Docker: "nežinoma", patirtis: 100, atlyginimas: 100}`, silpniausi kriterijai – SQL (33 %) ir Docker (nežinoma, trūksta duomenų) |
 | Klaida arba neįmanomas rezultatas | Ta pati pozicija | Kandidatas neturi Python įgūdžio (privalomas reikalavimas) | NETINKAMAS iškart, be tolesnio balo skaičiavimo. Papildomas atvejis: pozicijos kriterijų svoriai sumuojasi į 0,9 (ne 1,0) → sistema grąžina klaidą „Neteisingi pozicijos svoriai“, balas neskaičiuojamas |
 
 **Jei modulis naudoja AI:** Netaikoma.
@@ -132,7 +137,7 @@ Paaiškinimas: SQL kriterijus pasiekė tik 67 % savo galimo indėlio (kandidato 
 
 | Priemonė ir užduotis | Ką panaudojau | Ką atmečiau arba perrašiau ir kodėl | Kaip patikrinau |
 |---|---|---|---|
-| Claude – temos išsigryninimas | Padėjo suprasti problemą, apsispręsti, kuo sistema būtų naudinga, ir sugalvoti, kokias papildomas funkcijas galėčiau integruoti | Iš kelių AI pasiūlytų temų pasirinkau rezervacijų sistemą, nes ji man pasirodė aiškiausia | Palyginau pasiūlymą su tuo, ką pats norėjau daryti, ir pasirinkau artimiausią savo supratimui |
+| Claude – temos išsigryninimas | Padėjo suprasti problemą, apsispręsti, kuo sistema būtų naudinga, ir sugalvoti, kokias papildomas funkcijas galėčiau integruoti | Iš kelių AI pasiūlytų temų pasirinkau kandidatų atitikties vertinimo sistemą, nes ji man pasirodė aiškiausia | Palyginau pasiūlymą su tuo, ką pats norėjau daryti, ir pasirinkau artimiausią savo supratimui |
 | Claude – Markdown formatavimas | Kadangi anksčiau niekada nedirbau su .md failais, naudojau Claude, kad tekstas būtų tvarkingai suformatuotas (antraštės, lentelės, paryškinimai) | Formatavimą palikau beveik be pakeitimų, nes tai tik techninė failo išvaizda, ne turinys | Patikrinau, kad dokumentas tvarkingai atsivaizduoja GitHub'e |
 | ChatGPT – teksto juodraščio rašymas | Pradinį teksto variantą atskiriems skyriams | Vėliau perrašiau savais žodžiais, kaip pats būčiau pasakęs ir parašęs, kad tikrai suprasčiau ir galėčiau paaiškinti kiekvieną teiginį | Perskaičiau ir palyginau kiekvieną skyrių su užduoties reikalavimais punktas po punkto |
 
