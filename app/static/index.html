@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="lt">
+<head>
+  <meta charset="utf-8">
+  <title>Kandidatų atitikties vertinimas</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; background: #fff; color: #111; }
+    label { display: block; margin: 0.5rem 0; }
+    input, select, button { font-size: 1rem; padding: 0.25rem 0.5rem; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ccc; padding: 0.4rem 0.6rem; text-align: left; }
+    #result { margin-top: 1rem; padding: 0.75rem; background: #f2f2f2; }
+    #result.error { color: #b00020; }
+  </style>
+</head>
+<body>
+  <h1>Kandidatų atitikties vertinimo sistema</h1>
+
+  <label>Organizacija <select id="organization"></select></label>
+  <label>Pozicija <select id="position"></select></label>
+
+  <h2>Pozicijos reikalavimai</h2>
+  <ul id="requirements"></ul>
+
+  <h2>Kandidato duomenys</h2>
+  <form id="candidate-form">
+    <label>Vardas, pavardė <input id="name"></label>
+    <fieldset>
+      <legend>Įgūdžių lygiai nuo 1 iki 5 (palikite tuščią, jei įgūdis nenurodomas)</legend>
+      <div id="skill-inputs"></div>
+    </fieldset>
+    <label>Patirtis metais <input id="experience" type="number"></label>
+    <label>Atlyginimo lūkestis <input id="salary" type="number"></label>
+    <button>Įvertinti</button>
+  </form>
+  <div id="result" hidden></div>
+
+  <h2>Kandidatai pagal balą</h2>
+  <table>
+    <thead>
+      <tr><th>Kandidatas</th><th>Balas</th><th>Rekomendacija</th><th>Paaiškinimas</th><th>Pastaba</th></tr>
+    </thead>
+    <tbody id="candidates"></tbody>
+  </table>
+
+  <script>
+    const organizationSelect = document.getElementById("organization");
+    const positionSelect = document.getElementById("position");
+    const requirements = document.getElementById("requirements");
+    const form = document.getElementById("candidate-form");
+    const skillInputs = document.getElementById("skill-inputs");
+    const result = document.getElementById("result");
+    const candidatesTable = document.getElementById("candidates");
+
+    let positions = [];
+
+    async function api(path, body) {
+      const options = { headers: { "X-Organization": organizationSelect.value } };
+      if (body) {
+        options.method = "POST";
+        options.headers["Content-Type"] = "application/json";
+        options.body = JSON.stringify(body);
+      }
+      const response = await fetch(path, options);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(typeof data.detail === "string" ? data.detail : "Neteisingi įvesties duomenys");
+      }
+      return data;
+    }
+
+    function element(tag, text) {
+      const node = document.createElement(tag);
+      node.textContent = text;
+      return node;
+    }
+
+    function fillSelect(select, items, labelKey) {
+      select.replaceChildren(...items.map(item => new Option(item[labelKey], item.id)));
+    }
+
+    function skillInput(skill) {
+      const label = element("label", skill + " ");
+      const input = document.createElement("input");
+      input.type = "number";
+      input.dataset.skill = skill;
+      label.append(input);
+      return label;
+    }
+
+    function numberOrNull(input) {
+      return input.value === "" ? null : Number(input.value);
+    }
+
+    function formatScore(score) {
+      return score === null ? "neskaičiuotas" : score;
+    }
+
+    function formatExplanation(explanation) {
+      return Object.entries(explanation)
+        .map(([name, value]) => typeof value === "number" ? `${name}: ${value} %` : `${name}: ${value}`)
+        .join(", ");
+    }
+
+    async function loadOrganizations() {
+      const response = await fetch("/api/organizations");
+      fillSelect(organizationSelect, await response.json(), "name");
+      await loadPositions();
+    }
+
+    async function loadPositions() {
+      positions = await api("/api/positions");
+      fillSelect(positionSelect, positions, "title");
+      await showPosition();
+    }
+
+    async function showPosition() {
+      const position = positions.find(item => item.id === Number(positionSelect.value));
+      requirements.replaceChildren(
+        element("li", "Privalomi įgūdžiai: " + (position.required_skills.join(", ") || "nėra")),
+        ...position.criteria.map(criterion => element("li", `${criterion.description} (svoris ${criterion.weight})`)),
+      );
+      skillInputs.replaceChildren(...position.skills.map(skillInput));
+      result.hidden = true;
+      await loadCandidates();
+    }
+
+    async function loadCandidates() {
+      const candidates = await api(`/api/positions/${positionSelect.value}/candidates`);
+      candidatesTable.replaceChildren(...candidates.map(candidate => {
+        const row = document.createElement("tr");
+        row.append(
+          element("td", candidate.name),
+          element("td", formatScore(candidate.score)),
+          element("td", candidate.recommendation),
+          element("td", formatExplanation(candidate.explanation)),
+          element("td", candidate.note),
+        );
+        return row;
+      }));
+    }
+
+    function showResult(lines, isError) {
+      result.replaceChildren(...lines.map(line => element("div", line)));
+      result.className = isError ? "error" : "";
+      result.hidden = false;
+    }
+
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const skills = {};
+      for (const input of skillInputs.querySelectorAll("input")) {
+        if (input.value !== "") {
+          skills[input.dataset.skill] = Number(input.value);
+        }
+      }
+      const candidate = {
+        name: document.getElementById("name").value,
+        skills: skills,
+        experience_years: numberOrNull(document.getElementById("experience")),
+        salary_expectation: numberOrNull(document.getElementById("salary")),
+      };
+      try {
+        const evaluation = await api(`/api/positions/${positionSelect.value}/candidates`, candidate);
+        const lines = [
+          "Balas: " + formatScore(evaluation.score),
+          "Rekomendacija: " + evaluation.recommendation,
+        ];
+        if (Object.keys(evaluation.explanation).length > 0) {
+          lines.push("Paaiškinimas: " + formatExplanation(evaluation.explanation));
+        }
+        if (evaluation.note) {
+          lines.push(evaluation.note);
+        }
+        showResult(lines, false);
+        await loadCandidates();
+      } catch (error) {
+        showResult(["Klaida: " + error.message], true);
+      }
+    });
+
+    organizationSelect.addEventListener("change", loadPositions);
+    positionSelect.addEventListener("change", showPosition);
+    loadOrganizations();
+  </script>
+</body>
+</html>
